@@ -1,41 +1,56 @@
 name: x86-64 Pull and Save Docker Image
+
 on:
   workflow_dispatch:
     inputs:
       docker_images:
-        description: '请填写docker镜像名称 多个用英文逗号分开'
+        description: '请填写 docker 镜像名称，多个用英文逗号分开'
         required: true
-        default: 'alpine:latest,busybox:stable-glibc'  # 设置默认的 Docker 镜像列表
+        default: 'alpine:latest,busybox:stable-glibc'
 
 jobs:
   pull_and_package:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      # 1. 检出代码（虽然用不到，但保持规范）
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Clean up Docker to free space
-      run: |
+      # 2. 登录 Docker Hub，解除匿名拉取限额
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 3. 清理本地无用数据，腾出空间
+      - name: Clean up Docker to free space
+        run: |
           docker system prune -a -f
           docker volume prune -f
 
-    - name: Pull Docker Images and Package
-      run: |
-        images="${{ github.event.inputs.docker_images }}"
+      # 4. 拉取指定镜像并打包为 amd64 归档
+      - name: Pull Docker Images and Package
+        run: |
+          images="${{ github.event.inputs.docker_images }}"
           IFS=',' read -r -a image_array <<< "$images"
           for image in "${image_array[@]}"; do
+            # 拉取 linux/amd64 平台镜像
             docker pull "${image}" --platform "linux/amd64"
+            # 把镜像名中的 / 和 : 替换成 _，方便做文件名
             image_name="${image//\//_}"
             image_name="${image_name//:/_}"
+            # 保存为 tar -> 压缩 -> 删除原 tar
             docker save "${image}" -o "${image_name}-amd64.tar"
             gzip -c "${image_name}-amd64.tar" > "${image_name}-amd64.tar.gz"
             rm "${image_name}-amd64.tar"
           done
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: my-artifact
-        path: ${{ github.workspace }}/*.tar.gz
-        retention-days: 1  # 将保留天数设置为 1 天 最多可设置90天
+      # 5. 把压缩包上传为制品，供后续步骤或手动下载
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-artifact
+          path: ${{ github.workspace }}/*.tar.gz
+          retention-days: 1   # 制品仅保留 1 天（可改 1-90）
